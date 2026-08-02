@@ -1402,16 +1402,22 @@ class MemoryStore:
         if df.empty or str(record.id) not in set(df["id"].tolist()):
             return
         literal_ct = self._encrypt_for_record(record.id, record.literal_surface)
+        values = {
+            "literal_surface": literal_ct,
+            "embedding": [float(x) for x in record.embedding],
+            "centrality": float(record.centrality),
+            "tier": record.tier,
+            "pinned": bool(record.pinned),
+            "updated_at": datetime.now(timezone.utc),
+        }
+        # A rewritten surface can be in a different language than the one it
+        # replaced. Only a declared language is carried: legacy rows read back
+        # with an empty one must not overwrite what is stored.
+        if isinstance(record.language, str) and record.language.strip():
+            values["language"] = record.language
         tbl.update(
             where=f"id = '{_uuid_literal(record.id)}'",
-            values={
-                "literal_surface": literal_ct,
-                "embedding": [float(x) for x in record.embedding],
-                "centrality": float(record.centrality),
-                "tier": record.tier,
-                "pinned": bool(record.pinned),
-                "updated_at": datetime.now(timezone.utc),
-            },
+            values=values,
         )
         self._fire_graph_sync_hook("update", record)
         self._feed_recency(record)

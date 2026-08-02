@@ -353,6 +353,22 @@ Measured on an Apple M2 Max (64 GB). The harnesses are the proof — run them yo
 | `IAI_MCP_EMBED_MODEL_ID` | — | Model identifier; required for the `http` provider |
 | `IAI_MCP_EMBED_TIMEOUT_SEC` | `30` | Local provider request timeout |
 
+### Identity
+
+The one thing worth setting by hand is who you are. It is stored in
+`~/.iai-mcp/config.json` and served as the L0 anchor at the head of every
+session:
+
+```bash
+iai-mcp config identity --name "Alice" --languages "en" --role "backend engineer"
+iai-mcp config identity                      # show the current one
+iai-mcp config identity --extra-file me.md   # append a longer brief verbatim
+```
+
+Write it in whatever language you actually work in — a non-English identity is
+stored as a declared raw capture, not rejected. Edits apply immediately and
+also on the next boot, so the anchor never drifts from the file.
+
 The built-in Rust BGE model remains the zero-configuration default. Setting the
 provider to `http` replaces it completely: the native model is not constructed,
 downloaded, or run. This makes multilingual and domain-specific embedders

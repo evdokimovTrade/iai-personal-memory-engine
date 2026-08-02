@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`iai-mcp config identity`.** The unconfigured identity anchor told you to run
+  this command, and the command did not exist — the only way to set your name,
+  language, role, or project was to hand-edit a `config.json` nothing created.
+  It now exists: it prints the current identity when given no arguments, sets
+  each field by flag, takes a longer brief verbatim from `--extra-file`, and
+  leaves unrelated keys in the file untouched.
+
+### Fixed
+
+- **A non-English identity no longer breaks startup.** The anchor is stored as
+  English raw verbatim unless the record declares a raw capture, and the seed
+  declared none — so a name or role written in Cyrillic, kana, or han raised at
+  boot, taking the server with it. The anchor now declares `raw:<lang>` and
+  records the language it was written in.
+- **An identity edited after the first run now reaches memory.** Seeding was
+  one-time, so later edits to `config.json` never updated the stored anchor and
+  it kept serving the "not yet configured" placeholder. Boot now reconciles the
+  anchor with the file; an unchanged identity costs one lookup and no
+  re-embedding.
+
 ## [2.4.1] — 2026-07-19
 
 ### Fixed
