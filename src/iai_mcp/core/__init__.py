@@ -1879,7 +1879,13 @@ def main() -> None:
     _require_native()
 
     store = MemoryStore()
-    _seed_l0_identity(store)
+    # Refresh, not seed: an identity edited after first boot has to reach the
+    # anchor. Unchanged config costs one get() and no embed.
+    try:
+        refresh_l0_identity(store)
+    except Exception as e:  # noqa: BLE001 -- a bad identity must not block boot
+        sys.stderr.write(f"iai-mcp: identity anchor refresh failed: {e}\n")
+        sys.stderr.flush()
 
     try:
         from iai_mcp.tz import load_user_tz
@@ -1929,6 +1935,13 @@ from iai_mcp.core._query_dispatch import (  # noqa: E402
 from iai_mcp.core._identity import (  # noqa: E402
     _load_l0_identity_seed,
     _seed_l0_identity,
+    refresh_l0_identity,
+    identity_language,
+    identity_tags,
+    load_identity_config,
+    render_identity_surface,
+    identity_config_path,
+    IDENTITY_FIELDS,
     L0_ID,
     _DEFAULT_L0_SEED,
 )
@@ -1947,6 +1960,13 @@ __all__ = [
     "L0_ID",
     "_seed_l0_identity",
     "_load_l0_identity_seed",
+    "refresh_l0_identity",
+    "identity_language",
+    "identity_tags",
+    "load_identity_config",
+    "render_identity_surface",
+    "identity_config_path",
+    "IDENTITY_FIELDS",
     "EVENTS_QUERY_WHITELIST",
     "_inject_overnight_digest",
     "_inject_sleep_suggestion",

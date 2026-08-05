@@ -279,6 +279,10 @@ from ._maintenance import (
     _print_drain_result,
 )
 
+from ._config import (
+    cmd_config_identity,
+)
+
 from ._crypto import (
     cmd_crypto_status,
     cmd_crypto_rotate,
@@ -509,6 +513,45 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     udp.set_defaults(func=cmd_deferred_unlock_dead_pids)
+
+    cfg = sub.add_parser(
+        "config",
+        help="read and write ~/.iai-mcp/config.json",
+    )
+    cfg_sub = cfg.add_subparsers(dest="config_cmd", required=True)
+    cfgi = cfg_sub.add_parser(
+        "identity",
+        help=(
+            "show or set the identity anchor (L0) served at the head of "
+            "every session; no arguments prints the current one"
+        ),
+    )
+    cfgi.add_argument("--name", help="how the assistant should refer to you")
+    cfgi.add_argument(
+        "--languages",
+        help="primary languages, e.g. 'ru' or 'ru, en (docs)'",
+    )
+    cfgi.add_argument("--role", help="what you do, e.g. 'trader, product manager'")
+    cfgi.add_argument("--project", help="the project you are currently on")
+    cfgi.add_argument(
+        "--extra",
+        help="free-form context appended verbatim to the anchor",
+    )
+    cfgi.add_argument(
+        "--extra-file",
+        help="read --extra from a file (for a full system instruction)",
+    )
+    cfgi.add_argument(
+        "--clear-extra",
+        action="store_true",
+        help="drop the free-form block",
+    )
+    cfgi.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="write config only; leave the stored anchor to the next boot",
+    )
+    cfgi.set_defaults(func=cmd_config_identity)
 
     c = sub.add_parser(
         "crypto",
