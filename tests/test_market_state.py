@@ -161,6 +161,52 @@ def test_orderbook_is_timing_tier_only(ms):
     assert f.caution and "тайминг" in f.caution
 
 
+def test_flat_price_with_rising_spot_is_absorption_short(ms):
+    # Покупки идут, цена стоит — их поглощают. Раньше правило здесь молчало.
+    f = ms.rule_price_vs_spot(_snap(ms, price=ms.FLAT, spot_cvd=ms.UP))
+    assert f.bias == ms.SHORT
+    assert "поглощают" in f.reading and "распределение" in f.reading
+
+
+def test_flat_price_with_falling_spot_is_absorption_long(ms):
+    f = ms.rule_price_vs_spot(_snap(ms, price=ms.FLAT, spot_cvd=ms.DOWN))
+    assert f.bias == ms.LONG
+    assert "накопление" in f.reading
+
+
+def test_flat_price_flat_spot_still_unresolved(ms):
+    f = ms.rule_price_vs_spot(_snap(ms, price=ms.FLAT, spot_cvd=ms.FLAT))
+    assert f.bias is None
+
+
+def test_flat_price_absorption_on_futures_too(ms):
+    assert ms.rule_price_vs_futures(_snap(ms, price=ms.FLAT, futures_cvd=ms.UP)).bias == ms.SHORT
+    assert ms.rule_price_vs_futures(_snap(ms, price=ms.FLAT, futures_cvd=ms.DOWN)).bias == ms.LONG
+
+
+def test_venue_book_delta_divergence(ms):
+    long_side = ms.rule_book_venues(
+        _snap(ms, futures_book_delta=ms.DOWN, spot_book_delta=ms.UP)
+    )
+    assert long_side.bias == ms.LONG and long_side.tier == 4
+    short_side = ms.rule_book_venues(
+        _snap(ms, futures_book_delta=ms.UP, spot_book_delta=ms.DOWN)
+    )
+    assert short_side.bias == ms.SHORT
+    assert short_side.caution and "тайминг" in short_side.caution
+
+
+def test_venue_book_aligned_is_no_signal(ms):
+    assert ms.rule_book_venues(
+        _snap(ms, futures_book_delta=ms.UP, spot_book_delta=ms.UP)
+    ).bias is None
+
+
+def test_venue_book_aliases_parse(ms):
+    parsed = ms.parse_table("фьючбук ↘️\nспотбук ↗️")
+    assert parsed == {"futures_book_delta": ms.DOWN, "spot_book_delta": ms.UP}
+
+
 def test_missing_input_makes_rule_unresolved(ms):
     f = ms.rule_crowd(_snap(ms, price=ms.UP))
     assert f.resolved is False
@@ -209,7 +255,8 @@ def test_analysis_lists_missing_indicators(ms):
     a = ms.analyze(_snap(ms, phase=ms.EARLY, price=ms.UP, oi=ms.UP))
     assert "Спотовая дельта" in a.missing
     assert "NetOE Long" in a.missing
-    assert len(a.missing) == 7
+    # Заданы price и oi, недостающим остаётся всё остальное из реестра.
+    assert len(a.missing) == len(ms.INDICATORS) - 2
 
 
 def test_scores_use_tier_weights(ms):

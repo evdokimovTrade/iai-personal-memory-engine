@@ -56,6 +56,11 @@ INDICATORS: dict[str, str] = {
     "ns": "NetOE Short",
     "bid_delta": "Bid-дельта стакана",
     "ask_delta": "Ask-дельта стакана",
+    # CoinGlass отдаёт не раздельные bid и ask, а один готовый дисбаланс на
+    # площадку. Это отдельные индикаторы, а не замена двум предыдущим:
+    # источник с раздельными рядами продолжает работать через bid_delta/ask_delta.
+    "futures_book_delta": "Bid&Ask дельта фьючерса",
+    "spot_book_delta": "Bid&Ask дельта спота",
 }
 
 _ALIASES: dict[str, str] = {
@@ -75,6 +80,10 @@ _ALIASES: dict[str, str] = {
     "биддельта": "bid_delta",
     "ask": "ask_delta", "askdelta": "ask_delta", "аск": "ask_delta",
     "аскдельта": "ask_delta",
+    "futuresbookdelta": "futures_book_delta", "fbd": "futures_book_delta",
+    "фьючбук": "futures_book_delta", "бидаскфьючерс": "futures_book_delta",
+    "spotbookdelta": "spot_book_delta", "sbd": "spot_book_delta",
+    "спотбук": "spot_book_delta", "бидаскспот": "spot_book_delta",
 }
 
 _DIRECTION_TOKENS: dict[str, str] = {
@@ -306,7 +315,16 @@ def rule_price_vs_spot(snap: Snapshot) -> Finding:
     if price == spot and price in (UP, DOWN):
         return Finding("Цена против спотовой дельты", 2, LONG if price == UP else SHORT,
                        "спот подтверждает движение цены", inputs)
-    return Finding("Цена против спотовой дельты", 2, None, "боковик по одной из величин", inputs)
+    if price == FLAT and spot == UP:
+        return Finding("Цена против спотовой дельты", 2, SHORT,
+                       "спотовые покупки не двигают цену — их поглощают, идёт распределение",
+                       inputs)
+    if price == FLAT and spot == DOWN:
+        return Finding("Цена против спотовой дельты", 2, LONG,
+                       "спотовые продажи не двигают цену — их поглощают, идёт накопление",
+                       inputs)
+    return Finding("Цена против спотовой дельты", 2, None,
+                   "спот в боковике: поглощения не видно", inputs)
 
 
 def rule_price_vs_futures(snap: Snapshot) -> Finding:
@@ -326,7 +344,16 @@ def rule_price_vs_futures(snap: Snapshot) -> Finding:
     if price == fut and price in (UP, DOWN):
         return Finding("Цена против фьючерсной дельты", 2, LONG if price == UP else SHORT,
                        "фьючерс подтверждает движение цены", inputs)
-    return Finding("Цена против фьючерсной дельты", 2, None, "боковик по одной из величин", inputs)
+    if price == FLAT and fut == UP:
+        return Finding("Цена против фьючерсной дельты", 2, SHORT,
+                       "агрессивные покупки на фьючерсе не двигают цену — их поглощают",
+                       inputs)
+    if price == FLAT and fut == DOWN:
+        return Finding("Цена против фьючерсной дельты", 2, LONG,
+                       "агрессивные продажи на фьючерсе не двигают цену — их поглощают",
+                       inputs)
+    return Finding("Цена против фьючерсной дельты", 2, None,
+                   "фьючерсная дельта в боковике: поглощения не видно", inputs)
 
 
 def rule_crowd(snap: Snapshot) -> Finding:
@@ -390,6 +417,32 @@ def rule_orderbook(snap: Snapshot) -> Finding:
     return Finding("Перекос стакана", 4, None, "перекоса нет", inputs)
 
 
+def rule_book_venues(snap: Snapshot) -> Finding:
+    """Ярус 4. Дисбаланс стакана: фьючерс против спота.
+
+    Для источников, отдающих один готовый Bid&Ask-дисбаланс на площадку
+    (CoinGlass), а не раздельные бид и аск.
+    """
+    inputs = {
+        "futures_book_delta": snap.get("futures_book_delta"),
+        "spot_book_delta": snap.get("spot_book_delta"),
+    }
+    pending = _pending("Стакан: фьючерс против спота", 4, inputs)
+    if pending is not None:
+        return pending
+    fut, spot = snap.values["futures_book_delta"], snap.values["spot_book_delta"]
+    caution = "стакан переставляется мгновенно; только тайминг, не направление"
+    if fut == DOWN and spot == UP:
+        return Finding("Стакан: фьючерс против спота", 4, LONG,
+                       "спотовый бид держит против давления на фьючерсе", inputs,
+                       caution=caution)
+    if fut == UP and spot == DOWN:
+        return Finding("Стакан: фьючерс против спота", 4, SHORT,
+                       "фьючерсный бид не подкреплён спотом", inputs, caution=caution)
+    return Finding("Стакан: фьючерс против спота", 4, None,
+                   "площадки сонаправлены: расхождения нет", inputs)
+
+
 ALL_RULES = (
     rule_oi_vs_futures,
     rule_spot_vs_futures,
@@ -398,6 +451,7 @@ ALL_RULES = (
     rule_crowd,
     rule_netoe,
     rule_orderbook,
+    rule_book_venues,
 )
 
 
