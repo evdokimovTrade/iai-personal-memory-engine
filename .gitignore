@@ -66,3 +66,7 @@ runtime_*.json
 
 # Rust build output
 target/
+
+# Local trade journal (personal account data; structure is versioned, contents are not)
+memory/journal/trades.jsonl
+memory/**/*.raw.json
