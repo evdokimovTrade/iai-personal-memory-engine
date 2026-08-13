@@ -36,6 +36,7 @@
 ## Table of contents
 
 - [What it is](#what-it-is)
+- [Pick your path](#pick-your-path)
 - [Quick start](#quick-start)
 - [Usage](#usage)
 - [How it works](#how-it-works)
@@ -43,6 +44,7 @@
 - [Benchmarks](#benchmarks)
 - [Configuration](#configuration)
 - [Doctor](#doctor)
+- [Troubleshooting](#troubleshooting)
 - [Notes for AI assistants](#notes-for-ai-assistants-helping-with-installation)
 - [Status and limitations](#status-and-limitations)
 - [Compatibility](#compatibility)
@@ -90,7 +92,7 @@ And unlike cloud memory services, there's no API key, no account, and no telemet
 - Node.js 18+
 - A Rust toolchain — the native engine builds from source
 - An MCP-compatible CLI host — [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Codex CLI, Gemini CLI, Cursor CLI, and others
-- ~500 MB free disk
+- ~500 MB free disk to get started; budget ~5 GB for model weights, the store and its WAL as memory accumulates — full sizing in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 
 macOS and Linux are fully supported. **Windows support is in beta** — the runtime is ported and validated on Windows 11, but the test suite is still being ported, so treat it as experimental. Contributions are very welcome: if you hit a Windows issue, open an issue or PR and I'll help however I can.
 
@@ -119,10 +121,10 @@ iai --version
 
 ### Install the capture + recall hooks
 
-This is what makes memory ambient. Without these hooks iai-mcp reads memory but never writes conversation content and never injects recall at session start. One command wires all three:
+This is what makes memory ambient. Without these hooks iai-mcp reads memory but never writes conversation content and never injects recall at session start. One command wires all four:
 
 ```bash
-iai-mcp capture-hooks install       # copies all three hooks + patches ~/.claude/settings.json
+iai-mcp capture-hooks install       # copies all four hooks + patches ~/.claude/settings.json
 iai-mcp capture-hooks status        # verify: should print "status: ACTIVE"
 iai-mcp capture-hooks uninstall     # clean removal if ever needed
 ```
@@ -141,8 +143,9 @@ iai-mcp capture-hooks install --target all
 
 What the install does:
 
-- Copies three hook scripts bundled with the package to `~/.claude/hooks/` (chmod +x):
+- Copies four hook scripts bundled with the package to `~/.claude/hooks/` (chmod +x):
   - `iai-mcp-turn-capture.sh` (`UserPromptSubmit`, timeout 5s) — appends each prompt + the preceding assistant turn(s) to a per-session buffer as pure file IO. Zero engine RPC during the session.
+  - `iai-mcp-per-turn-recall.sh` (`UserPromptSubmit`, timeout 5s) — injects the working-tier snapshot on each turn, reading only the local engine's cache files. No socket round-trip, no Python interpreter; a stale snapshot is ignored, so a sleeping engine costs nothing and blocks nothing.
   - `iai-mcp-session-capture.sh` (`Stop`, timeout 35s) — at session end, rolls the buffer over for the local engine to drain, and runs `iai-mcp capture-transcript --no-spawn` as a safety net.
   - `iai-mcp-session-recall.sh` (`SessionStart`, timeout 30s) — calls `iai-mcp session-start` and pipes the assembled memory prefix to stdout, which Claude Code injects as `additionalContext` before the first prompt. Fail-safe: empty store or unreachable local engine yields empty stdout — session start is never blocked.
 - Registers iai-mcp in Claude Desktop's config if installed.
@@ -151,7 +154,8 @@ What the install does:
 
 What happens at runtime:
 
-- **Every prompt** (per-turn hook): appends new transcript turns to the session buffer. ~5 ms per turn, no embedding, no engine socket.
+- **Every prompt** (per-turn capture hook): appends new transcript turns to the session buffer. ~5 ms per turn, no embedding, no engine socket.
+- **Every prompt** (per-turn recall hook): injects the cached working-tier snapshot if it's fresh. Cache reads only — never blocks the turn.
 - **Every session end** (Stop hook): rolls the buffer over, captures any remaining turns. Fail-safe exit 0.
 - **Every session start** (recall hook): assembles the cached memory prefix and pipes it to Claude. Empty store or unreachable local engine → empty stdout.
 - **When idle** (local engine): drains the buffer through the shield → embed → dedup → encrypted insert pipeline on the WAKE → DROWSY edge (5-min idle) and after every REM cycle.
@@ -261,7 +265,7 @@ Recall combines three signals: semantic similarity, graph-link strength, and rec
 <p align="center"><img src="docs/assets/slides/slide-06.jpg" width="850" alt="iai-pme"></p>
 <p align="center"><img src="docs/assets/slides/slide-07.jpg" width="850" alt="iai-pme"></p>
 
-All records are encrypted at rest with AES-256-GCM. The key lives in `~/.iai-mcp/.key` (mode 0600). Back it up. Lose the key, lose the memories.
+All records are encrypted at rest with AES-256-GCM. The key lives in `~/.iai-mcp/.crypto.key` (mode 0600). Back it up. Lose the key, lose the memories.
 
 Everything lives at `~/.iai-mcp/`. Embeddings are computed locally. The only data that leaves the machine is your normal conversation with whatever LLM API your client uses.
 
@@ -345,8 +349,7 @@ Measured on an Apple M2 Max (64 GB). The harnesses are the proof — run them yo
 |---|---|---|
 | `IAI_MCP_STORE` | `~/.iai-mcp/` | Data directory |
 | `IAI_MCP_PYTHON` | — | Absolute path to the venv Python (for the MCP host config) |
-| `IAI_MCP_RECALL_CONCURRENCY` | `2` | Maximum cued `memory_recall` calls dispatched concurrently by the socket daemon |
-| `IAI_MCP_RECALL_SLOT_WAIT_SEC` | `0.25` | How long an overflow cued recall waits for a slot before returning `_degraded: recall_busy` |
+| `IAI_MCP_CRYPTO_PASSPHRASE` | — | Derives the AES key from a passphrase when no `.crypto.key` file exists — for CI and other non-interactive environments |
 | `IAI_MCP_EMBED_PROVIDER` | `native` | `native` for built-in BGE or `http` for a replaceable loopback provider |
 | `IAI_MCP_EMBED_URL` | — | Loopback endpoint or base URL for the `http` provider |
 | `IAI_MCP_EMBED_DIM` | `384` | Vector dimension; required for the `http` provider |
@@ -363,7 +366,7 @@ possible without adding a Python ML stack to iai-mcp. See
 
 ## Doctor
 
-`iai-mcp doctor` runs 25 checks against the local engine, the store, the native engine, and the runtime state. Output is one line per check: PASS, WARN, or FAIL.
+`iai-mcp doctor` runs 26 checks against the local engine, the store, the native engine, and the runtime state. Output is one line per check: PASS, WARN, or FAIL.
 
 <p align="center"><img src="docs/assets/slides/slide-13.jpg" width="850" alt="iai-pme"></p>
 
@@ -378,7 +381,7 @@ What it checks:
 | a | daemon process alive | Is the daemon process running? |
 | b | socket file fresh | Can the UNIX socket accept a connection? |
 | c | lock file healthy | Is the process lock held correctly? |
-| d | no orphan core procs | No leftover stdio core process without a daemon |
+| d | no orphan iai_mcp.core procs | No leftover stdio core process without a daemon |
 | e | daemon state file valid | State file parses and has expected fields |
 | f | hippo storage readable | Can the store be opened and queried? |
 | g | no dup binders | Only one process is bound to the socket |
@@ -396,9 +399,10 @@ What it checks:
 | s | hippo schema version | Store schema is current |
 | t | hippo_compacted freshness | Compaction has run recently |
 | u | recall centrality regression | Recall ranking hasn't regressed |
-| v | native Rust embedder | The Rust embedder is built and produces vectors |
+| v | configured embedder | The active embedder (native Rust by default) is reachable and produces vectors |
 | w | no permanent-failed captures | No capture is stuck after exhausting its retries |
-| x | timestamps not collapsed | Record timestamps span a real range, not all-identical |
+| x | no collapsed-timestamp groups | Record timestamps span a real range, not all-identical |
+| y | RSS 24h plateau | Daemon memory has plateaued, not crept upward for a day |
 | z | AVX2 CPU support | CPU supports the instructions the native libs need |
 
 A full-PASS run is healthy. Dropping (b) during a sleep cycle is normal (the socket is busy during consolidation). Multiple FAILs, or a FAIL on (a)/(f)/(v), means something is actually wrong.
@@ -442,7 +446,7 @@ When in doubt, run `iai-mcp doctor` and read what it says. The output is self-ex
 
 ## Status and limitations
 
-**Out of experimental.** I built this for myself and ran it daily for months; it's now a stable release with a committed public surface. The MCP tool set and the on-disk store stay stable across `1.x` — breaking changes go through the changelog with a deprecation window. It's still a solo-maintained project with no enterprise SLA, but it's no longer a moving target.
+**Out of experimental.** I built this for myself and ran it daily for months; it's now a stable release with a committed public surface. The MCP tool set and the on-disk store stay stable across `2.x` — breaking changes go through the changelog with a deprecation window. It's still a solo-maintained project with no enterprise SLA, but it's no longer a moving target.
 
 Limitations worth knowing about:
 

@@ -197,7 +197,7 @@ tail ~/.iai-mcp/logs/capture-$(date -u +%Y-%m-%d).log
 
 召回综合三种信号：语义相似度、图连接强度、时近性。三者一起排序。热路径完全本地运行，链路中没有 LLM。
 
-所有记录在静态时使用 AES-256-GCM 加密。密钥放在 `~/.iai-mcp/.key`（mode 0600）。请备份。**密钥丢失 = 记忆丢失。**
+所有记录在静态时使用 AES-256-GCM 加密。密钥放在 `~/.iai-mcp/.crypto.key`（mode 0600）。请备份。**密钥丢失 = 记忆丢失。**
 
 一切都存放在 `~/.iai-mcp/`。嵌入在本地计算。唯一离开机器的数据，就是你的客户端本来就要调用的那次 LLM API 请求。
 
@@ -226,7 +226,7 @@ tail ~/.iai-mcp/logs/capture-$(date -u +%Y-%m-%d).log
 
 - **基准测试细节**（LongMemEval-S 对比 mempalace、Rescue@10、漂移、整合、延迟、内存占用） → [README.md#benchmarks](./README.md#benchmarks)
 - **配置项**（环境变量、调优旋钮） → [README.md#configuration](./README.md#configuration)
-- **Doctor 自检**（25 项健康检查清单） → [README.md#doctor](./README.md#doctor)
+- **Doctor 自检**（26 项健康检查清单） → [README.md#doctor](./README.md#doctor)
 - **故障排查** → [README.md#troubleshooting](./README.md#troubleshooting)
 - **状态与限制** → [README.md#status-and-limitations](./README.md#status-and-limitations)
 - **兼容性**（Claude Code / Codex CLI / Gemini CLI / Cursor CLI / Claude Desktop） → [README.md#compatibility](./README.md#compatibility)
@@ -240,4 +240,4 @@ tail ~/.iai-mcp/logs/capture-$(date -u +%Y-%m-%d).log
 
 ## Authors
 
-By Areg Aramovich Noya, in collaboration with the team at [lcgc.dev](https://lcgc.dev).
+By Areg Aramovich Noya and Lilli Noya, in collaboration with the team at [lcgc.dev](https://lcgc.dev).
