@@ -16,6 +16,13 @@
 Неизвестное не равно нулю. Если фаза не задана там, где она решает
 направление сделки, состояние определяется, но сделка не формируется:
 ``tradable`` = False с причиной «фаза не задана».
+
+``--oi-change`` обязан быть изменением ОИ в монетах, а не в долларах. Доллар
+ОИ — произведение числа контрактов на цену, поэтому его рост ничего не
+говорит о притоке денег: он может быть целиком объяснён ростом цены при
+нулевом числе новых контрактов. Если под рукой только $ОИ, сначала прогнать
+через ``decompose_oi_usd`` (или ``python oi_state.py decompose-usd``), чтобы
+получить изменение именно числа контрактов.
 """
 
 from __future__ import annotations
@@ -387,6 +394,92 @@ def funding_positioning(funding: str | None, long_short_accounts: str | None) ->
     )
 
 
+# --------------------------------------------------------------------------
+# ОИ в монетах против ОИ в долларах
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class OiUsdDecomposition:
+    oi_usd_change_pct: float
+    price_change_pct: float
+    oi_coins_change_pct: float
+    driver: str
+    reading: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+def decompose_oi_usd(
+    oi_usd_before: float,
+    oi_usd_after: float,
+    price_before: float,
+    price_after: float,
+    flat_threshold_pct: float = 1.0,
+) -> OiUsdDecomposition:
+    """Отделить реальное изменение числа контрактов от переоценки ценой.
+
+    ОИ в долларах — произведение, а не факт: ``ОИ$ = ОИ_монет × цена``. Отсюда
+    точное тождество для восстановления числа контрактов:
+
+        ОИ_монет(после)/ОИ_монет(до) = (ОИ$(после)/ОИ$(до)) / (цена(после)/цена(до))
+
+    Ловушка симметрична дельте доминации: доллар ОИ может расти без единого
+    нового контракта, если растёт только цена; и может падать, пока контракты
+    реально открываются, если цена падает быстрее. Для чтения состояния
+    «пришли новые деньги» (матрица ОИ×цена) годится только ОИ в монетах —
+    доллар ОИ для этого не источник, потому что цена уже сидит внутри него.
+    """
+    for name, value in (
+        ("ОИ$ до", oi_usd_before), ("ОИ$ после", oi_usd_after),
+        ("цена до", price_before), ("цена после", price_after),
+    ):
+        if value <= 0:
+            raise StateError(f"{name} должна быть положительной, получено {value!r}")
+
+    oi_usd_ratio = oi_usd_after / oi_usd_before
+    price_ratio = price_after / price_before
+    oi_coins_ratio = oi_usd_ratio / price_ratio
+
+    usd_pct = (oi_usd_ratio - 1) * 100
+    price_pct = (price_ratio - 1) * 100
+    coins_pct = (oi_coins_ratio - 1) * 100
+
+    usd_dir = direction_of(usd_pct, flat_threshold_pct)
+    coins_dir = direction_of(coins_pct, flat_threshold_pct)
+
+    if usd_dir == FLAT:
+        driver = "без изменений"
+        reading = "ОИ в долларах не изменился в пределах порога"
+    elif coins_dir == FLAT:
+        driver = "чистая переоценка"
+        reading = (
+            "число контрактов не изменилось — доллар ОИ двигала только цена, "
+            "новых денег не приходило"
+        )
+    elif usd_dir == UP and coins_dir == UP:
+        driver = "реальный приток"
+        reading = "контракты действительно открываются, цена усиливает картину в долларах"
+    elif usd_dir == DOWN and coins_dir == DOWN:
+        driver = "реальный отток"
+        reading = "контракты действительно закрываются, цена усиливает картину в долларах"
+    elif usd_dir == UP and coins_dir == DOWN:
+        driver = "закрытие позиций замаскировано ростом цены"
+        reading = (
+            "доллар ОИ вырос, но контрактов стало меньше — рост цены перекрыл закрытие "
+            "позиций; чтение «пришли новые деньги» по $ОИ здесь ложное"
+        )
+    else:
+        driver = "открытие позиций замаскировано падением цены"
+        reading = (
+            "доллар ОИ упал, но контрактов стало больше — падение цены перекрыло "
+            "открытие позиций; чтение «деньги уходят» по $ОИ здесь ложное"
+        )
+
+    return OiUsdDecomposition(usd_pct, price_pct, coins_pct, driver, reading)
+
+
 def confluence(signals: Sequence[ScenarioSignal]) -> dict[str, Any]:
     """Свести сценарии в один вывод, не пряча несогласие.
 
@@ -481,7 +574,44 @@ def _render(verdict: Verdict, scenarios: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def _build_decompose_usd_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="oi_state decompose-usd",
+        description="отделить рост числа контрактов от переоценки ценой в $ОИ",
+    )
+    parser.add_argument("--oi-usd-before", type=float, required=True)
+    parser.add_argument("--oi-usd-after", type=float, required=True)
+    parser.add_argument("--price-before", type=float, required=True)
+    parser.add_argument("--price-after", type=float, required=True)
+    parser.add_argument("--flat-threshold", type=float, default=1.0)
+    parser.add_argument("--json", action="store_true")
+    return parser
+
+
+def _main_decompose_usd(argv: Sequence[str]) -> int:
+    args = _build_decompose_usd_parser().parse_args(argv)
+    try:
+        result = decompose_oi_usd(
+            args.oi_usd_before, args.oi_usd_after,
+            args.price_before, args.price_after, args.flat_threshold,
+        )
+    except StateError as exc:
+        print(f"ошибка: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"ОИ в долларах: {result.oi_usd_change_pct:+.2f}%")
+        print(f"Цена: {result.price_change_pct:+.2f}%")
+        print(f"ОИ в монетах (восстановлено): {result.oi_coins_change_pct:+.2f}%")
+        print(f"Причина: {result.driver} — {result.reading}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    argv = list(argv) if argv is not None else sys.argv[1:]
+    if argv[:1] == ["decompose-usd"]:
+        return _main_decompose_usd(argv[1:])
     args = build_parser().parse_args(argv)
     try:
         phase = args.phase or phase_from_range_position(args.range_position)

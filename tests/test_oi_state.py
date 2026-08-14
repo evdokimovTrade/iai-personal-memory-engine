@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -312,6 +313,94 @@ def test_cli_json_output(oi, capsys):
     assert rc == 0
     assert payload["verdict"]["state"] == 5
     assert payload["verdict"]["direction"] == "short"
+
+
+# --------------------------------------------------------------------------
+# ОИ в монетах против ОИ в долларах
+# --------------------------------------------------------------------------
+
+
+def test_pure_revaluation_when_coins_flat(oi):
+    # Число контрактов не изменилось, доллар ОИ вырос на 20% ровно вслед за ценой.
+    r = oi.decompose_oi_usd(1000.0, 1200.0, 100.0, 120.0)
+    assert r.oi_coins_change_pct == pytest.approx(0.0, abs=1e-9)
+    assert r.driver == "чистая переоценка"
+    assert "новых денег не приходило" in r.reading
+
+
+def test_real_inflow_when_coins_and_usd_agree(oi):
+    r = oi.decompose_oi_usd(1000.0, 1500.0, 100.0, 120.0)
+    assert r.oi_coins_change_pct == pytest.approx(25.0)
+    assert r.driver == "реальный приток"
+
+
+def test_real_outflow(oi):
+    r = oi.decompose_oi_usd(1000.0, 700.0, 100.0, 90.0)
+    assert r.oi_coins_change_pct < 0
+    assert r.driver == "реальный отток"
+
+
+def test_closing_masked_by_rising_price(oi):
+    # Доллар ОИ вырос на 10%, но цена выросла на 30% — контрактов стало меньше.
+    r = oi.decompose_oi_usd(1000.0, 1100.0, 100.0, 130.0)
+    assert r.oi_usd_change_pct > 0
+    assert r.oi_coins_change_pct < 0
+    assert r.driver == "закрытие позиций замаскировано ростом цены"
+    assert "ложное" in r.reading
+
+
+def test_opening_masked_by_falling_price(oi):
+    # Доллар ОИ упал на 10%, но цена упала на 30% — контрактов стало больше.
+    r = oi.decompose_oi_usd(1000.0, 900.0, 100.0, 70.0)
+    assert r.oi_usd_change_pct < 0
+    assert r.oi_coins_change_pct > 0
+    assert r.driver == "открытие позиций замаскировано падением цены"
+
+
+def test_flat_usd_oi_is_reported_as_flat(oi):
+    r = oi.decompose_oi_usd(1000.0, 1002.0, 100.0, 100.0, flat_threshold_pct=1.0)
+    assert r.driver == "без изменений"
+
+
+def test_decompose_usd_rejects_nonpositive_inputs(oi):
+    with pytest.raises(oi.StateError, match="положительной"):
+        oi.decompose_oi_usd(0.0, 1000.0, 100.0, 110.0)
+    with pytest.raises(oi.StateError, match="цена после"):
+        oi.decompose_oi_usd(1000.0, 1100.0, 100.0, -1.0)
+
+
+def test_cli_decompose_usd_subcommand(oi, capsys):
+    rc = oi.main([
+        "decompose-usd", "--oi-usd-before", "1000", "--oi-usd-after", "1100",
+        "--price-before", "100", "--price-after", "130",
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "замаскировано ростом цены" in out
+
+
+def test_cli_decompose_usd_json(oi, capsys):
+    oi.main([
+        "decompose-usd", "--oi-usd-before", "1000", "--oi-usd-after", "1500",
+        "--price-before", "100", "--price-after", "120", "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["driver"] == "реальный приток"
+    assert payload["oi_coins_change_pct"] == pytest.approx(25.0)
+
+
+def test_cli_decompose_usd_bad_input_exits_two(oi, capsys):
+    rc = oi.main([
+        "decompose-usd", "--oi-usd-before", "-1", "--oi-usd-after", "1000",
+        "--price-before", "100", "--price-after", "100",
+    ])
+    assert rc == 2
+
+
+def test_existing_classify_cli_unaffected_by_new_subcommand(oi, capsys):
+    # Флат-CLI без "decompose-usd" первым аргументом обязан работать как раньше.
+    rc = oi.main(["--oi-change", "5", "--price-change", "5", "--flat-threshold", "1"])
+    assert rc == 1
 
 
 def test_cli_reports_missing_measurements(oi, capsys):
